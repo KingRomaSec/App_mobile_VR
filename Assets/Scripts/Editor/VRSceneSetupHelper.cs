@@ -13,7 +13,7 @@ using UnityEngine.XR.Management;
 
 /// <summary>
 /// Outil de configuration en 1 clic du projet VR 360 Kiosque :
-///  - Réglages Player Android (IL2CPP / ARM64 / API 24+ / paysage / Input System "Both")
+///  - Réglages Player Android (IL2CPP / ARM64 / API 26+ / paysage / Input System "Both")
 ///  - Activation du loader Google Cardboard dans XR Plug-in Management (Android)
 ///  - Génération et sauvegarde de la scène Assets/Scenes/VR360_Kiosk.unity
 ///  - Ajout de la scène dans les Build Settings
@@ -36,7 +36,7 @@ public static class VRSceneSetupHelper
 
         string msg =
             "Configuration VR 360 Kiosk terminée.\n\n" +
-            "- Réglages Android : IL2CPP, ARM64, API 24+, paysage gauche.\n" +
+            "- Réglages Android : IL2CPP, ARM64, API 26+, paysage gauche.\n" +
             (xrOk ? "- Google Cardboard activé dans XR Plug-in Management (Android).\n"
                   : "- ⚠ Cardboard NON activé automatiquement : cochez-le dans Project Settings > XR Plug-in Management > Android.\n") +
             (sceneOk ? $"- Scène générée et sauvegardée : {ScenePath}\n" : "- ⚠ Échec de génération de la scène (voir Console).\n") +
@@ -52,7 +52,7 @@ public static class VRSceneSetupHelper
     {
         PlayerSettings.SetScriptingBackend(NamedBuildTarget.Android, ScriptingImplementation.IL2CPP);
         PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
-        PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel24;
+        PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel26; // minimum requis par GfxPluginCardboard.aar
         PlayerSettings.defaultInterfaceOrientation = UIOrientation.LandscapeLeft;
         PlayerSettings.Android.startInFullscreen = true;
         PlayerSettings.Android.renderOutsideSafeArea = true;
