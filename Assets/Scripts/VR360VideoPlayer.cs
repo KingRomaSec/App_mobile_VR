@@ -1,12 +1,18 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.IO;
-using System.Reflection;
+using Google.XR.Cardboard;
 using UnityEngine;
 using UnityEngine.Video;
+using UnityEngine.XR.Management;
+#if UNITY_ANDROID
+using UnityEngine.Android;
+#endif
 
 /// <summary>
 /// Lecteur Vidéo 360° Stéréoscopique Kiosque Hors-Ligne pour Casque VR Shinecon G06E
-/// Compatible Google Cardboard XR Plugin - Android / Unity
+/// Compatible Google Cardboard XR Plugin - Android / Unity 6
 /// </summary>
 [RequireComponent(typeof(VideoPlayer))]
 public class VR360VideoPlayer : MonoBehaviour
@@ -25,6 +31,18 @@ public class VR360VideoPlayer : MonoBehaviour
     [Tooltip("Délai anti-rebond en secondes pour les boutons mécaniques")]
     [SerializeField] private float debounceTime = 0.35f;
 
+    [Header("Casque (Cardboard)")]
+    [Tooltip("URL du QR code du casque (ex: https://google.com/cardboard/cfg?p=...). " +
+             "Si vide, l'appli demande de scanner le QR code du Shinecon G06E au 1er lancement (mémorisé ensuite).")]
+    [SerializeField] private string deviceParamsUri = "";
+
+    [Tooltip("Autorise la roue dentée Cardboard à relancer le scan du QR code (désactivé en kiosque)")]
+    [SerializeField] private bool allowGearRescan = false;
+
+    [Header("Kiosque")]
+    [Tooltip("Épingle l'application (Android Lock Task). Sans appareil 'Device Owner', Android demande une confirmation une fois.")]
+    [SerializeField] private bool enableScreenPinning = true;
+
     // Composants
     private VideoPlayer _videoPlayer;
     private AudioSource _audioSource;
@@ -34,9 +52,7 @@ public class VR360VideoPlayer : MonoBehaviour
     private bool _isPressed = false;
     private float _lastActionTime = 0f;
 
-    // Cache Reflection pour Google Cardboard XR
-    private MethodInfo _cardboardRecenterMethod;
-    private MethodInfo _cardboardTriggerMethod;
+    private bool _pinningRequested = false;
 
     private void Awake()
     {
@@ -46,21 +62,22 @@ public class VR360VideoPlayer : MonoBehaviour
         // 1. Configuration Kiosque & Écran
         SetupKioskDisplay();
 
-        // 2. Initialisation du pont Cardboard XR (Safe Reflection)
-        InitCardboardApi();
-
-        // 3. Configuration du VideoPlayer
+        // 2. Configuration du VideoPlayer
         ConfigureVideoPlayer();
     }
 
     private void Start()
     {
+        // 3. Paramètres optiques du casque (QR code Cardboard)
+        InitCardboardDeviceParams();
+
         // 4. Résolution du chemin et chargement de la vidéo
-        ResolveAndLoadVideo();
+        StartCoroutine(ResolveAndLoadVideo());
     }
 
     private void Update()
     {
+        UpdateCardboard();
         HandleInputs();
     }
 
@@ -86,6 +103,7 @@ public class VR360VideoPlayer : MonoBehaviour
     {
         // Empêcher l'extinction de l'écran dans le casque
         Screen.sleepTimeout = SleepTimeout.NeverSleep;
+        Screen.brightness = 1.0f;
 
         // Cacher la barre d'état et forcer le plein écran
         Screen.fullScreen = true;
@@ -95,33 +113,64 @@ public class VR360VideoPlayer : MonoBehaviour
     }
 
     /// <summary>
-    /// Force le mode Immersif Sticky sous Android (supprime navigation bar et status bar)
+    /// Exécute une action sur le thread UI Android (obligatoire pour toucher aux Views / à l'Activity)
     /// </summary>
-    private void ApplyAndroidImmersiveMode()
+    private static void RunOnAndroidUiThread(Action<AndroidJavaObject> action)
     {
 #if UNITY_ANDROID && !UNITY_EDITOR
         try
         {
             using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
-            using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
-            using (var window = activity.Call<AndroidJavaObject>("getWindow"))
-            using (var decorView = window.Call<AndroidJavaObject>("getDecorView"))
             {
-                // SYSTEM_UI_FLAG_FULLSCREEN (4)
-                // SYSTEM_UI_FLAG_HIDE_NAVIGATION (2)
-                // SYSTEM_UI_FLAG_IMMERSIVE_STICKY (4096)
-                // SYSTEM_UI_FLAG_LAYOUT_STABLE (256)
-                // SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION (512)
-                // SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN (1024)
-                int flags = 4 | 2 | 4096 | 256 | 512 | 1024;
-                decorView.Call("setSystemUiVisibility", flags);
+                AndroidJavaObject activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity");
+                activity.Call("runOnUiThread", new AndroidJavaRunnable(() =>
+                {
+                    try
+                    {
+                        action(activity);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning("[Kiosk] Erreur sur le thread UI Android : " + ex.Message);
+                    }
+                }));
             }
         }
         catch (Exception ex)
         {
-            Debug.LogWarning("[Kiosk] Impossible d'appliquer le mode immersif : " + ex.Message);
+            Debug.LogWarning("[Kiosk] Impossible d'accéder à l'Activity Android : " + ex.Message);
         }
 #endif
+    }
+
+    /// <summary>
+    /// Force le mode Immersif Sticky sous Android (supprime navigation bar et status bar)
+    /// </summary>
+    private static void ApplyAndroidImmersiveMode()
+    {
+        RunOnAndroidUiThread(activity =>
+        {
+            using (var window = activity.Call<AndroidJavaObject>("getWindow"))
+            using (var decorView = window.Call<AndroidJavaObject>("getDecorView"))
+            {
+                // FULLSCREEN (4) | HIDE_NAVIGATION (2) | IMMERSIVE_STICKY (4096)
+                // LAYOUT_STABLE (256) | LAYOUT_HIDE_NAVIGATION (512) | LAYOUT_FULLSCREEN (1024)
+                int flags = 4 | 2 | 4096 | 256 | 512 | 1024;
+                decorView.Call("setSystemUiVisibility", flags);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Épingle l'application (Lock Task) : bloque Accueil / Récents tant que l'app est épinglée.
+    /// </summary>
+    private void StartScreenPinning()
+    {
+        if (!enableScreenPinning || _pinningRequested) return;
+        _pinningRequested = true;
+
+        RunOnAndroidUiThread(activity => activity.Call("startLockTask"));
+        Debug.Log("[Kiosk] Épinglage de l'écran demandé.");
     }
 
     #endregion
@@ -133,7 +182,7 @@ public class VR360VideoPlayer : MonoBehaviour
         _videoPlayer.playOnAwake = false;
         _videoPlayer.isLooping = true; // Boucle infinie demandée
         _videoPlayer.source = VideoSource.Url;
-        _videoPlayer.aspectRatio = VideoAspectRatio.FitHorizontally;
+        _videoPlayer.skipOnDrop = true;
 
         // Configuration du rendu direct sur le matériau de la sphère
         if (targetSphereRenderer != null)
@@ -141,6 +190,10 @@ public class VR360VideoPlayer : MonoBehaviour
             _videoPlayer.renderMode = VideoRenderMode.MaterialOverride;
             _videoPlayer.targetMaterialRenderer = targetSphereRenderer;
             _videoPlayer.targetMaterialProperty = "_MainTex";
+        }
+        else
+        {
+            Debug.LogError("[Video] 'targetSphereRenderer' non assigné : lancez le menu VR Kiosk > 1-Click Setup.");
         }
 
         // Configuration Audio (Direct ou AudioSource)
@@ -161,49 +214,42 @@ public class VR360VideoPlayer : MonoBehaviour
         _videoPlayer.errorReceived += OnVideoError;
     }
 
-    private void ResolveAndLoadVideo()
+    private IEnumerator ResolveAndLoadVideo()
     {
-        string finalPath = "";
+        string finalPath = null;
 
-        // 1. Vérifier dans Application.persistentDataPath (Stockage interne accessible sans root)
-        // Dossier : /storage/emulated/0/Android/data/<package_name>/files/
+        // 1. Application.persistentDataPath (/storage/emulated/0/Android/data/<package>/files/) - aucune permission requise
         string persistentPath = Path.Combine(Application.persistentDataPath, videoFileName);
         if (File.Exists(persistentPath))
         {
             finalPath = persistentPath;
         }
-        else
+        else if (Directory.Exists(Application.persistentDataPath))
         {
-            // Recherche du premier fichier .mp4 présent dans persistentDataPath
-            if (Directory.Exists(Application.persistentDataPath))
+            string[] mp4Files = Directory.GetFiles(Application.persistentDataPath, "*.mp4");
+            if (mp4Files.Length > 0)
             {
-                string[] mp4Files = Directory.GetFiles(Application.persistentDataPath, "*.mp4");
-                if (mp4Files.Length > 0)
-                {
-                    finalPath = mp4Files[0];
-                    Debug.Log($"[Video] Fichier MP4 automatique détecté : {finalPath}");
-                }
+                Array.Sort(mp4Files, StringComparer.OrdinalIgnoreCase);
+                finalPath = mp4Files[0];
+                Debug.Log($"[Video] Fichier MP4 automatique détecté : {finalPath}");
             }
         }
 
-        // 2. Si non trouvé, vérifier dans StreamingAssets (fichiers inclus dans l'APK ou OBB)
-        if (string.IsNullOrEmpty(finalPath))
+        // 2. StreamingAssets (embarqué dans l'APK)
+        if (finalPath == null)
         {
             string streamingPath = Path.Combine(Application.streamingAssetsPath, videoFileName);
-#if UNITY_ANDROID && !UNITY_EDITOR
-            // Sur Android, StreamingAssets est dans l'APK compressé, VideoPlayer accepte le chemin direct
-            finalPath = streamingPath;
-#else
-            if (File.Exists(streamingPath))
+            if (StreamingAssetExists(streamingPath))
             {
                 finalPath = streamingPath;
             }
-#endif
         }
 
-        // 3. Fallback sur chemin public Movies/DCIM si présent
-        if (string.IsNullOrEmpty(finalPath) || !File.Exists(finalPath))
+        // 3. Dossier public Movies (permission de lecture des médias requise)
+        if (finalPath == null)
         {
+            yield return EnsureMediaReadPermission();
+
             string publicMoviesPath = Path.Combine("/storage/emulated/0/Movies", videoFileName);
             if (File.Exists(publicMoviesPath))
             {
@@ -211,9 +257,76 @@ public class VR360VideoPlayer : MonoBehaviour
             }
         }
 
+        if (finalPath == null)
+        {
+            Debug.LogError($"[Video] Aucune vidéo trouvée ('{videoFileName}'). Copiez-la dans : {Application.persistentDataPath}");
+            yield break;
+        }
+
         Debug.Log($"[Video] Chemin vidéo cible : {finalPath}");
         _videoPlayer.url = finalPath;
         _videoPlayer.Prepare();
+    }
+
+    /// <summary>
+    /// Vérifie la présence d'un fichier StreamingAssets (sur Android il est dans l'APK, File.Exists ne marche pas).
+    /// </summary>
+    private static bool StreamingAssetExists(string path)
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        try
+        {
+            string relative = path.Substring(Application.streamingAssetsPath.Length).TrimStart('/');
+            using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+            using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+            using (var assets = activity.Call<AndroidJavaObject>("getAssets"))
+            using (var stream = assets.Call<AndroidJavaObject>("open", relative))
+            {
+                stream.Call("close");
+                return true;
+            }
+        }
+        catch
+        {
+            return false;
+        }
+#else
+        return File.Exists(path);
+#endif
+    }
+
+    /// <summary>
+    /// Demande la permission de lecture des vidéos (READ_MEDIA_VIDEO sur Android 13+, READ_EXTERNAL_STORAGE avant).
+    /// </summary>
+    private IEnumerator EnsureMediaReadPermission()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        int sdkInt;
+        using (var version = new AndroidJavaClass("android.os.Build$VERSION"))
+        {
+            sdkInt = version.GetStatic<int>("SDK_INT");
+        }
+
+        string permission = sdkInt >= 33 ? "android.permission.READ_MEDIA_VIDEO" : Permission.ExternalStorageRead;
+        if (Permission.HasUserAuthorizedPermission(permission)) yield break;
+
+        bool done = false;
+        var callbacks = new PermissionCallbacks();
+        callbacks.PermissionGranted += _ => done = true;
+        callbacks.PermissionDenied += _ => done = true;
+#pragma warning disable 0618
+        callbacks.PermissionDeniedAndDontAskAgain += _ => done = true;
+#pragma warning restore 0618
+        Permission.RequestUserPermission(permission, callbacks);
+
+        float timeout = Time.realtimeSinceStartup + 60f;
+        while (!done && Time.realtimeSinceStartup < timeout) yield return null;
+
+        // Le dialogue système a pu réafficher les barres : on remet le mode immersif
+        ApplyAndroidImmersiveMode();
+#else
+        yield break;
+#endif
     }
 
     private void OnVideoPrepared(VideoPlayer source)
@@ -232,10 +345,85 @@ public class VR360VideoPlayer : MonoBehaviour
 
     #endregion
 
-    #region 3. CONTRÔLE PHYSIQUE (BOUTON SHINECON & USB-C)
+    #region 3. CARDBOARD (PARAMÈTRES CASQUE SHINECON G06E)
+
+    /// <summary>
+    /// true si le loader Cardboard est initialisé (faux dans l'éditeur ou si XR est désactivé)
+    /// </summary>
+    private static bool IsCardboardActive
+    {
+        get
+        {
+            var settings = XRGeneralSettings.Instance;
+            return settings != null && settings.Manager != null &&
+                   settings.Manager.activeLoader is Google.XR.Cardboard.XRLoader;
+        }
+    }
+
+    private void InitCardboardDeviceParams()
+    {
+        if (!IsCardboardActive)
+        {
+            Debug.LogWarning("[Cardboard] Loader Cardboard inactif (éditeur ou XR désactivé) : rendu non stéréo.");
+            return;
+        }
+
+        if (Api.HasDeviceParams())
+        {
+            StartScreenPinning();
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(deviceParamsUri))
+        {
+            // Profil du casque fourni dans l'inspecteur : aucun scan nécessaire
+            Api.SaveDeviceParams(deviceParamsUri.Trim());
+            Api.ReloadDeviceParams();
+            Debug.Log("[Cardboard] Paramètres du casque appliqués depuis l'URL configurée.");
+            StartScreenPinning();
+        }
+        else
+        {
+            // 1er lancement : scan du QR code du casque (mémorisé par le SDK Cardboard)
+            // L'épinglage est différé après le scan pour ne pas bloquer l'activité de scan.
+            Debug.Log("[Cardboard] Aucun profil casque : lancement du scan du QR code.");
+            Api.ScanDeviceParams();
+        }
+    }
+
+    private void UpdateCardboard()
+    {
+        if (!IsCardboardActive) return;
+
+        if (Api.HasNewDeviceParams())
+        {
+            Api.ReloadDeviceParams();
+            StartScreenPinning();
+        }
+
+        // Requis à chaque frame par le plugin (rotation / taille d'écran)
+        Api.UpdateScreenParams();
+    }
+
+    #endregion
+
+    #region 4. CONTRÔLE PHYSIQUE (BOUTON SHINECON & USB-C)
 
     private void HandleInputs()
     {
+        // Widget Cardboard : en kiosque, le bouton "X" ne quitte pas l'application,
+        // et la roue dentée n'est active que si allowGearRescan est coché.
+        if (Api.IsCloseButtonPressed)
+        {
+            return;
+        }
+
+        if (Api.IsGearButtonPressed)
+        {
+            if (allowGearRescan) Api.ScanDeviceParams();
+            return;
+        }
+
         bool isTriggerDown = false;
         bool isTriggerUp = false;
 
@@ -246,13 +434,14 @@ public class VR360VideoPlayer : MonoBehaviour
             if (touch.phase == TouchPhase.Began) isTriggerDown = true;
             if (touch.phase == TouchPhase.Ended || touch.phase == TouchPhase.Canceled) isTriggerUp = true;
         }
-
-        // Clic souris (simulé sous Android ou éditeur)
-        if (Input.GetMouseButtonDown(0)) isTriggerDown = true;
-        if (Input.GetMouseButtonUp(0)) isTriggerUp = true;
+        else
+        {
+            // Clic souris (éditeur) - ignoré si un toucher est actif pour éviter le double comptage
+            if (Input.GetMouseButtonDown(0)) isTriggerDown = true;
+            if (Input.GetMouseButtonUp(0)) isTriggerUp = true;
+        }
 
         // B. Bouton multifonction casque (Carte son USB-C ou jack 3.5mm)
-        // KeyCode.HeadsetHook est le code standard Android pour le bouton Play/Pause du casque
         if (Input.GetKeyDown(KeyCode.HeadsetHook) ||
             Input.GetKeyDown(KeyCode.MediaPlayPause) ||
             Input.GetKeyDown(KeyCode.Space))
@@ -267,12 +456,6 @@ public class VR360VideoPlayer : MonoBehaviour
             isTriggerUp = true;
         }
 
-        // C. Interrogation de l'API Cardboard (si présent)
-        if (IsCardboardTriggerPressed())
-        {
-            isTriggerDown = true;
-        }
-
         // Gestion de la logique Appui Court (Play/Pause) vs Appui Long (Recentrage manuel)
         if (isTriggerDown && !_isPressed)
         {
@@ -282,7 +465,7 @@ public class VR360VideoPlayer : MonoBehaviour
 
         if (_isPressed && Time.unscaledTime - _pressStartTime >= longPressDuration)
         {
-            // Appui long détecté (> 1.2s) -> Recentrage manuel
+            // Appui long détecté -> Recentrage manuel
             _isPressed = false;
             _lastActionTime = Time.unscaledTime;
             Debug.Log("[Contrôles] Appui long détecté -> Recentrage manuel de la vue.");
@@ -328,67 +511,25 @@ public class VR360VideoPlayer : MonoBehaviour
 
     #endregion
 
-    #region 4. RECENTRAGE VUE VR (CARDBOARD XR)
-
-    private void InitCardboardApi()
-    {
-        try
-        {
-            Type cardboardApi = Type.GetType("Google.XR.Cardboard.Api, Google.XR.Cardboard");
-            if (cardboardApi != null)
-            {
-                _cardboardRecenterMethod = cardboardApi.GetMethod("Recenter", BindingFlags.Public | BindingFlags.Static);
-                _cardboardTriggerMethod = cardboardApi.GetMethod("get_IsTriggerPressed", BindingFlags.Public | BindingFlags.Static);
-                Debug.Log("[Cardboard] Google Cardboard XR Plugin détecté et lié avec succès.");
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.LogWarning("[Cardboard] Initialisation Cardboard API via reflection ignorée : " + ex.Message);
-        }
-    }
-
-    private bool IsCardboardTriggerPressed()
-    {
-        if (_cardboardTriggerMethod != null)
-        {
-            try
-            {
-                return (bool)_cardboardTriggerMethod.Invoke(null, null);
-            }
-            catch { }
-        }
-        return false;
-    }
+    #region 5. RECENTRAGE VUE VR
 
     /// <summary>
-    /// Recentrage automatique de l'orientation de la caméra VR
+    /// Recentrage de l'orientation de la caméra VR
     /// </summary>
     public void RecenterView()
     {
-        // 1. Appel natif Cardboard XR
-        if (_cardboardRecenterMethod != null)
-        {
-            try
-            {
-                _cardboardRecenterMethod.Invoke(null, null);
-                Debug.Log("[VR] Recentrage Cardboard XR exécuté.");
-                return;
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning("[VR] Erreur lors de l'appel Recenter Cardboard : " + ex.Message);
-            }
-        }
+        // 1. Cardboard XR
+        if (IsCardboardActive) Api.Recenter();
 
-        // 2. Appel standard Unity XR (sous-systèmes d'entrée XR actifs)
-        var inputSubsystems = new System.Collections.Generic.List<UnityEngine.XR.XRInputSubsystem>();
+        // 2. Sous-systèmes d'entrée Unity XR
+        var inputSubsystems = new List<UnityEngine.XR.XRInputSubsystem>();
         SubsystemManager.GetSubsystems(inputSubsystems);
         foreach (var subsystem in inputSubsystems)
         {
             subsystem.TryRecenter();
         }
-        Debug.Log("[VR] Recentrage Unity XR exécuté.");
+
+        Debug.Log("[VR] Recentrage exécuté.");
     }
 
     #endregion
