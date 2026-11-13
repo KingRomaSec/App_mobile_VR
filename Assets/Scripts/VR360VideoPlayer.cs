@@ -381,10 +381,13 @@ public class VR360VideoPlayer : MonoBehaviour
             }
         }
 
-        // 2. Appel standard Unity XR InputTracking
-#pragma warning disable 0618
-        UnityEngine.XR.InputTracking.Recenter();
-#pragma warning restore 0618
+        // 2. Appel standard Unity XR (sous-systèmes d'entrée XR actifs)
+        var inputSubsystems = new System.Collections.Generic.List<UnityEngine.XR.XRInputSubsystem>();
+        SubsystemManager.GetSubsystems(inputSubsystems);
+        foreach (var subsystem in inputSubsystems)
+        {
+            subsystem.TryRecenter();
+        }
         Debug.Log("[VR] Recentrage Unity XR exécuté.");
     }
 
