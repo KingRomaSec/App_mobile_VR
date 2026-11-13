@@ -36,7 +36,7 @@ public static class VRSceneSetupHelper
 
         string msg =
             "Configuration VR 360 Kiosk terminée.\n\n" +
-            "- Réglages Android : IL2CPP, ARM64, API 26+, paysage gauche.\n" +
+            "- Réglages Android : IL2CPP, ARM64, API 26+, paysage gauche, point d'entrée Activity.\n" +
             (xrOk ? "- Google Cardboard activé dans XR Plug-in Management (Android).\n"
                   : "- ⚠ Cardboard NON activé automatiquement : cochez-le dans Project Settings > XR Plug-in Management > Android.\n") +
             (sceneOk ? $"- Scène générée et sauvegardée : {ScenePath}\n" : "- ⚠ Échec de génération de la scène (voir Console).\n") +
@@ -56,6 +56,10 @@ public static class VRSceneSetupHelper
         PlayerSettings.defaultInterfaceOrientation = UIOrientation.LandscapeLeft;
         PlayerSettings.Android.startInFullscreen = true;
         PlayerSettings.Android.renderOutsideSafeArea = true;
+
+        // Point d'entrée "Activity" classique (UnityPlayerActivity) : le plugin Cardboard
+        // n'est pas prévu pour GameActivity (défaut de Unity 6).
+        PlayerSettings.Android.applicationEntry = AndroidApplicationEntry.Activity;
 
         // Active Input Handling = Both (2)
         // Requis : le plugin Cardboard utilise le nouvel Input System, VR360VideoPlayer l'ancien.
