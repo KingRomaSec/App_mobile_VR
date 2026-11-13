@@ -54,6 +54,10 @@ public class VR360VideoPlayer : MonoBehaviour
 
     private bool _pinningRequested = false;
 
+    // Bouton casque audio (positionnés par OnHeadsetButton depuis Java)
+    private bool _headsetDown = false;
+    private bool _headsetUp = false;
+
     private void Awake()
     {
         _videoPlayer = GetComponent<VideoPlayer>();
@@ -71,8 +75,57 @@ public class VR360VideoPlayer : MonoBehaviour
         // 3. Paramètres optiques du casque (QR code Cardboard)
         InitCardboardDeviceParams();
 
-        // 4. Résolution du chemin et chargement de la vidéo
+        // 4. Bouton Play/Pause du casque audio (USB-C / jack)
+        StartHeadsetButtonBridge();
+
+        // 5. Résolution du chemin et chargement de la vidéo
         StartCoroutine(ResolveAndLoadVideo());
+    }
+
+    private void OnDestroy()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        try
+        {
+            using (var bridge = new AndroidJavaClass("com.vrkiosk.HeadsetButtonBridge"))
+            {
+                bridge.CallStatic("stop");
+            }
+        }
+        catch (Exception) { }
+#endif
+    }
+
+    /// <summary>
+    /// Démarre la MediaSession Android qui capte le bouton Play/Pause (HEADSETHOOK / MEDIA_PLAY_PAUSE)
+    /// et le renvoie à OnHeadsetButton("down"/"up").
+    /// </summary>
+    private void StartHeadsetButtonBridge()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        try
+        {
+            using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+            using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+            using (var bridge = new AndroidJavaClass("com.vrkiosk.HeadsetButtonBridge"))
+            {
+                bridge.CallStatic("start", activity, gameObject.name, nameof(OnHeadsetButton));
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("[Contrôles] Bouton casque audio indisponible : " + ex.Message);
+        }
+#endif
+    }
+
+    /// <summary>
+    /// Appelé depuis Java (UnitySendMessage) : "down" ou "up"
+    /// </summary>
+    public void OnHeadsetButton(string state)
+    {
+        if (state == "down") _headsetDown = true;
+        else if (state == "up") _headsetUp = true;
     }
 
     private void Update()
@@ -441,20 +494,13 @@ public class VR360VideoPlayer : MonoBehaviour
             if (Input.GetMouseButtonUp(0)) isTriggerUp = true;
         }
 
-        // B. Bouton multifonction casque (Carte son USB-C ou jack 3.5mm)
-        if (Input.GetKeyDown(KeyCode.HeadsetHook) ||
-            Input.GetKeyDown(KeyCode.MediaPlayPause) ||
-            Input.GetKeyDown(KeyCode.Space))
-        {
-            isTriggerDown = true;
-        }
+        // B. Bouton multifonction casque audio (USB-C / jack 3.5mm), reçu via la MediaSession Android
+        if (_headsetDown) { isTriggerDown = true; _headsetDown = false; }
+        if (_headsetUp) { isTriggerUp = true; _headsetUp = false; }
 
-        if (Input.GetKeyUp(KeyCode.HeadsetHook) ||
-            Input.GetKeyUp(KeyCode.MediaPlayPause) ||
-            Input.GetKeyUp(KeyCode.Space))
-        {
-            isTriggerUp = true;
-        }
+        // C. Barre d'espace (tests dans l'éditeur / clavier)
+        if (Input.GetKeyDown(KeyCode.Space)) isTriggerDown = true;
+        if (Input.GetKeyUp(KeyCode.Space)) isTriggerUp = true;
 
         // Gestion de la logique Appui Court (Play/Pause) vs Appui Long (Recentrage manuel)
         if (isTriggerDown && !_isPressed)
