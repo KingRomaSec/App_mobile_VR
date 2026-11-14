@@ -1,14 +1,21 @@
+// Shader vidéo VR multi-format.
+//  _Projection : 0 = 360° équirectangulaire, 1 = 180° équirectangulaire, 2 = écran plat (UV du mesh)
+//  _Layout     : 0 = mono, 1 = 3D côte à côte (œil gauche à gauche), 2 = 3D haut/bas (œil gauche en haut)
+// Pour 360/180 la direction est calculée depuis la position du sommet (indépendant des UV de la sphère),
+// avant de la vue = +Z de l'objet.
 Shader "VR/Stereo360_SideBySide"
 {
     Properties
     {
-        _MainTex ("Texture Video 360", 2D) = "black" {}
-        [Toggle] _InvertX ("Inverser Horizontal (Vue Intérieure)", Float) = 1.0
+        _MainTex ("Texture Vidéo", 2D) = "black" {}
+        [Enum(Equirect360,0,Equirect180,1,Flat,2)] _Projection ("Projection", Float) = 0
+        [Enum(Mono,0,SideBySide,1,TopBottom,2)] _Layout ("Disposition stéréo", Float) = 1
+        [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull", Float) = 1
     }
     SubShader
     {
-        Tags { "RenderType"="Opaque" "Queue"="Background" }
-        Cull Front // Affiche l'intérieur de la sphère Unity standard
+        Tags { "RenderType"="Opaque" "Queue"="Geometry" }
+        Cull [_Cull]
         ZWrite On
         ZTest LEqual
 
@@ -31,12 +38,13 @@ Shader "VR/Stereo360_SideBySide"
             {
                 float4 pos : SV_POSITION;
                 float2 uv : TEXCOORD0;
+                float3 dir : TEXCOORD1;
                 UNITY_VERTEX_OUTPUT_STEREO
             };
 
             sampler2D _MainTex;
-            float4 _MainTex_ST;
-            float _InvertX;
+            float _Projection;
+            float _Layout;
 
             v2f vert (appdata v)
             {
@@ -46,7 +54,8 @@ Shader "VR/Stereo360_SideBySide"
                 UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
 
                 o.pos = UnityObjectToClipPos(v.vertex);
-                o.uv = TRANSFORM_TEX(v.uv, _MainTex);
+                o.uv = v.uv;
+                o.dir = v.vertex.xyz;
                 return o;
             }
 
@@ -54,23 +63,45 @@ Shader "VR/Stereo360_SideBySide"
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
 
-                float2 uv = i.uv;
-
-                // Vue de l'intérieur de la sphère : inversion horizontale pour orientation naturelle
-                if (_InvertX > 0.5)
+                float2 uv;
+                if (_Projection < 1.5)
                 {
-                    uv.x = 1.0 - uv.x;
+                    float3 d = normalize(i.dir);
+                    float lon = atan2(d.x, d.z);              // 0 = devant, positif à droite
+                    float lat = asin(clamp(d.y, -1.0, 1.0));  // positif vers le haut
+
+                    if (_Projection > 0.5)
+                    {
+                        // 180° : seulement l'hémisphère avant
+                        if (abs(lon) > UNITY_PI * 0.5) return fixed4(0, 0, 0, 1);
+                        uv.x = lon / UNITY_PI + 0.5;
+                    }
+                    else
+                    {
+                        uv.x = lon / (2.0 * UNITY_PI) + 0.5;
+                    }
+                    uv.y = lat / UNITY_PI + 0.5;
+                }
+                else
+                {
+                    uv = i.uv;
                 }
 
-                // Détection de l'œil (0 = Œil Gauche, 1 = Œil Droit)
-                float eyeIndex = unity_StereoEyeIndex;
+                // 0 = œil gauche, 1 = œil droit (toujours 0 hors VR)
+                float eye = unity_StereoEyeIndex;
 
-                // Rendu Side-by-Side (SBS) :
-                // Œil gauche  -> échantillonne la moitié gauche  [0.0 - 0.5]
-                // Œil droit   -> échantillonne la moitié droite [0.5 - 1.0]
-                uv.x = (uv.x * 0.5) + (eyeIndex * 0.5);
+                if (_Layout > 1.5)
+                {
+                    // Haut/bas : œil gauche = moitié haute
+                    uv.y = uv.y * 0.5 + (1.0 - eye) * 0.5;
+                }
+                else if (_Layout > 0.5)
+                {
+                    // Côte à côte : œil gauche = moitié gauche
+                    uv.x = uv.x * 0.5 + eye * 0.5;
+                }
 
-                return tex2D(_MainTex, uv);
+                return tex2Dlod(_MainTex, float4(uv, 0, 0));
             }
             ENDCG
         }

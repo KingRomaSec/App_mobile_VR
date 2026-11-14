@@ -1,6 +1,7 @@
-# Application Mobile VR 360° Kiosque Hors-Ligne (Shinecon G06E / Google Cardboard XR)
+# Application Mobile VR — Lecteur vidéo 360° (Shinecon G06E / Google Cardboard XR)
 
-Application Android VR autonome haute performance conçue pour les casques mobiles type **Shinecon G06E** avec lecteur vidéo 360° stéréoscopique **Side-by-Side (SBS)**, mode kiosque verrouillé (zéro barre de navigation), gestion du bouton tactile/carte son USB-C, et recentrage automatique.
+Application Android VR pour casques mobiles type **Shinecon G06E** : bibliothèque des vidéos de la galerie du
+téléphone, lecture en 360°, 180° ou écran plat, en 2D ou 3D, et commandes au regard.
 
 ## Prérequis
 
@@ -9,57 +10,65 @@ Application Android VR autonome haute performance conçue pour les casques mobil
 
 ## Installation (première ouverture)
 
-1. Cloner le dépôt puis l'ouvrir via **Unity Hub > Add > Add project from disk**.
-   Unity installe automatiquement les paquets listés dans `Packages/manifest.json`
-   (dont le plugin Google Cardboard embarqué dans `Packages/com.google.xr.cardboard`).
+1. Cloner le dépôt puis l'ouvrir via **Unity Hub > Ajouter > Ajouter un projet depuis le disque**.
 2. **File > Build Profiles** : basculer la plateforme sur **Android**.
 3. Menu **VR Kiosk > 1-Click Setup (Projet + Scène)**. Cet outil :
-   - règle Android : IL2CPP, ARM64, API 26 minimum, paysage gauche, plein écran ;
-   - passe *Active Input Handling* sur **Both** (le plugin Cardboard utilise le nouvel Input System) ;
+   - règle Android : IL2CPP, ARM64, API 26 minimum, paysage, point d'entrée *Activity* ;
+   - passe *Active Input Handling* sur **Both** ;
    - active **Google Cardboard** dans *XR Plug-in Management* (Android) ;
-   - génère et sauvegarde la scène `Assets/Scenes/VR360_Kiosk.unity` et l'ajoute aux Build Settings.
-4. Si Unity demande de redémarrer (changement d'Input Handling), accepter puis relancer l'étape 3.
-5. **Commiter** les fichiers générés (`Assets/Scenes`, `Assets/Materials`, `Assets/XR`, `ProjectSettings/`, `.meta`).
+   - génère la scène `Assets/Scenes/VR360_Kiosk.unity` et l'ajoute aux Build Settings.
+4. Si Unity demande de redémarrer, accepter puis relancer l'étape 3.
+5. **File > Build Profiles > Build And Run**.
 
-## Vidéo
+Mise à jour du projet : fermer Unity puis `git pull`.
 
-Le lecteur cherche la vidéo dans cet ordre :
+## Utilisation
 
-1. `/storage/emulated/0/Android/data/<package>/files/video.mp4` (ou le premier `.mp4` trouvé) — recommandé, à copier par USB/`adb push` ;
-2. `Assets/StreamingAssets/video.mp4` (embarqué dans l'APK — non versionné dans git) ;
-3. `/storage/emulated/0/Movies/video.mp4` (l'application demande alors la permission d'accès aux vidéos).
+### Bibliothèque (au lancement)
+- Au 1er lancement, Android demande l'**accès aux vidéos** : acceptez (sinon bouton « Autoriser l'accès aux vidéos »).
+- Les vidéos de la **galerie du téléphone** s'affichent avec miniature, durée et taille, 6 par page.
+- **Viser** une vidéo avec le point blanc au centre de la vue, puis **appuyer sur le bouton du casque**
+  (ou **fixer 2 secondes** : l'anneau bleu se remplit) pour la lancer.
+- Boutons : `< Précédent` / `Suivant >`, `Actualiser`, `Recentrer`, `Quitter`.
 
-Format attendu : MP4 H.264/H.265, équirectangulaire 360°, **Side-by-Side** (œil gauche à gauche).
+### Lecteur
+| Action | Effet |
+|---|---|
+| Appui sur le bouton du casque (sans viser de bouton) | Affiche / masque les commandes |
+| Viser un bouton + appui (ou le fixer 2 s) | Active le bouton |
+| Appui long (> 1,2 s) | Recentre la vue |
+| Bouton Play/Pause d'écouteurs (USB-C, jack, Bluetooth) | Lecture / Pause |
+| **✕** du widget Cardboard ou touche **Retour** | Retour à la bibliothèque (depuis la bibliothèque : quitter) |
+| **⚙** du widget Cardboard | Scanner le QR code du casque |
+
+Commandes : `Vidéos`, `-10 s`, `Lecture/Pause`, `+10 s`, `Vol -`, `Vol +`, `Format`, `Recentrer`,
+et barre de progression (viser l'endroit voulu + appui).
+
+### Formats vidéo (bouton « Format », mémorisé pour chaque vidéo)
+360° 2D · 360° 3D côte à côte · 360° 3D haut/bas · 180° 3D côte à côte · Écran 2D · Écran 3D côte à côte.
+Détection automatique au 1er lancement selon les proportions et le nom du fichier
+(`360`, `180`, `3D`, `SBS`, `_LR`, `_TB`, `_OU`).
 
 ## Casque Shinecon G06E (calibration Cardboard)
 
-- **Au 1er lancement**, l'application ouvre le scanner Cardboard : scanner le **QR code fourni avec le Shinecon G06E**.
-  Le profil est mémorisé sur le téléphone, le scan n'est plus redemandé.
-- Pour éviter tout scan sur un parc de téléphones : renseigner l'URL du QR code dans le champ
-  **Device Params Uri** du composant `VR360VideoPlayer` (scène `VR360_Kiosk`).
-- La roue dentée du widget Cardboard est désactivée en kiosque (cocher **Allow Gear Rescan** pour la réactiver).
+- Au 1er lancement, le scanner Cardboard s'ouvre : scanner le **QR code fourni avec le casque**
+  (mémorisé ensuite). Le bouton **⚙** permet de le refaire.
+- Pour éviter le scan sur un parc de téléphones : renseigner l'URL du QR code dans **Device Params Uri**
+  du composant `VR360VideoPlayer` (objet `VR_Video_Manager` de la scène).
 
-## Mode kiosque
+## Mode kiosque (optionnel, désactivé par défaut)
 
-- Barres système masquées (mode immersif sticky, appliqué sur le thread UI Android).
-- Le bouton **X** du widget Cardboard ne quitte pas l'application.
-- **Épinglage d'écran** (Lock Task) activé après la calibration : Android demande une confirmation une fois.
-  Pour un verrouillage total sans confirmation, provisionner le téléphone en *Device Owner*
-  et autoriser l'application en Lock Task. Désactivable via **Enable Screen Pinning**.
-  Pour désépingler : maintenir Retour + Récents (selon le constructeur).
-
-## Contrôles
-
-| Action | Effet |
-|---|---|
-| Appui court (bouton du casque, écran, Play/Pause d'un casque audio USB-C/jack) | Lecture / Pause |
-| Appui long (> 1,2 s) | Recentrage de la vue |
+Cocher **Kiosk Mode** sur le composant `VR360VideoPlayer` pour épingler l'application, empêcher de quitter
+via ✕ / Retour et masquer « Quitter ». Pour désépingler : glisser vers le haut depuis le bas de l'écran et maintenir.
 
 ## Structure
 
-- `Assets/Shaders/Stereo360SBS.shader` : Shader Unlit stéréoscopique SBS (`unity_StereoEyeIndex`, `Cull Front`).
-- `Assets/Scripts/VR360VideoPlayer.cs` : lecture MP4 locale en boucle, mode immersif, anti-rebond, Play/Pause (appui court), recentrage (appui long).
-- `Assets/Scripts/Editor/VRSceneSetupHelper.cs` : outil de configuration en 1 clic (menu `VR Kiosk`).
-- `Assets/Scripts/Editor/CardboardGradleDependencies.cs` : ajoute au build les bibliothèques Java requises par Cardboard (AndroidX, Play Services Vision, Protobuf).
-- `Assets/Scripts/Editor/AndroidManifestPermissions.cs` : ajoute au build les permissions de lecture vidéo (`READ_MEDIA_VIDEO` / `READ_EXTERNAL_STORAGE`).
+- `Assets/Scripts/VR360VideoPlayer.cs` : application (bibliothèque, lecteur, commandes, formats, Cardboard).
+- `Assets/Scripts/VRGazeUI.cs` : interface VR au regard (boutons, viseur, clic par fixation).
+- `Assets/Scripts/AndroidGallery.cs` + `Assets/Plugins/Android/GalleryBridge.java` : galerie, miniatures, volume.
+- `Assets/Plugins/Android/HeadsetButtonBridge.java` : bouton Play/Pause des écouteurs.
+- `Assets/Shaders/Stereo360SBS.shader` : shader vidéo multi-format (360°/180°/écran, mono/côte à côte/haut-bas).
+- `Assets/Scripts/Editor/VRSceneSetupHelper.cs` : configuration en 1 clic (menu `VR Kiosk`).
+- `Assets/Scripts/Editor/CardboardGradleDependencies.cs` : bibliothèques Java requises par Cardboard.
+- `Assets/Scripts/Editor/AndroidManifestPermissions.cs` : permissions de lecture vidéo.
 - `Packages/com.google.xr.cardboard/` : Google Cardboard XR Plugin 1.36.0 (embarqué).
